@@ -3,6 +3,7 @@ package clarkdo;
 import org.junit.Test;
 
 import java.util.*;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Supplier;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
@@ -225,7 +226,7 @@ public class StreamTutorial {
                 Collector.of(
                         () -> new StringJoiner(" | "),          // supplier
                         (j, p) -> j.add(p.name.toUpperCase()),  // accumulator
-                        (j1, j2) -> j1.merge(j2),               // combiner
+                        StringJoiner::merge,               // combiner
                         StringJoiner::toString);                // finisher
 
         String names = persons
@@ -248,6 +249,148 @@ public class StreamTutorial {
         foos.stream()
                 .flatMap(f -> f.bars.stream())
                 .forEach(b -> System.out.println(b.name));
+        Outer outer = new Outer();
+        if (outer.nested != null && outer.nested.inner != null) {
+            System.out.println(outer.nested.inner.foo);
+        }
+        Optional.of(new Outer())
+                .flatMap(o -> Optional.ofNullable(o.nested))
+                .flatMap(n -> Optional.ofNullable(n.inner))
+                .flatMap(i -> Optional.ofNullable(i.foo))
+                .ifPresent(System.out::println);
+    }
+
+    @Test
+    public void testReduce() {
+
+        Person max = new Person("Max", 18),
+                peter = new Person("Peter", 23),
+                pamela = new Person("Pamela", 23),
+                david = new Person("David", 12);
+
+        List<Person> persons =
+                Arrays.asList(max, peter, pamela, david);
+
+        persons
+                .stream()
+                .reduce((p1, p2) -> p1.age > p2.age ? p1 : p2)
+                .ifPresent(System.out::println);    // Pamela
+
+        Person result =
+                persons
+                        .stream()
+                        .reduce(new Person("", 0), (p1, p2) -> {
+                            p1.age += p2.age;
+                            p1.name += p2.name;
+                            return p1;
+                        });
+
+        System.out.format("name=%s; age=%s", result.name, result.age);
+        // name=MaxPeterPamelaDavid; age=76
+
+        Integer ageSum = persons
+                .stream()
+                .reduce(0, (sum, p) -> sum += p.age, (sum1, sum2) -> sum1 + sum2);
+
+        System.out.println(ageSum);  // 76
+
+        ageSum = persons
+                .stream()
+                .reduce(0,
+                        (sum, p) -> {
+                            System.out.format("accumulator: sum=%s; person=%s\n", sum, p);
+                            return sum += p.age;
+                        },
+                        (sum1, sum2) -> {
+                            System.out.format("combiner: sum1=%s; sum2=%s\n", sum1, sum2);
+                            return sum1 + sum2;
+                        });
+        // accumulator: sum=0; person=Max
+        // accumulator: sum=18; person=Peter
+        // accumulator: sum=41; person=Pamela
+        // accumulator: sum=64; person=David
+
+        ageSum = persons
+                .parallelStream()
+                .reduce(0,
+                        (sum, p) -> {
+                            System.out.format("accumulator: sum=%s; person=%s\n", sum, p);
+                            return sum += p.age;
+                        },
+                        (sum1, sum2) -> {
+                            System.out.format("combiner: sum1=%s; sum2=%s\n", sum1, sum2);
+                            return sum1 + sum2;
+                        });
+
+        // accumulator: sum=0; person=Pamela
+        // accumulator: sum=0; person=David
+        // accumulator: sum=0; person=Max
+        // accumulator: sum=0; person=Peter
+        // combiner: sum1=18; sum2=23
+        // combiner: sum1=23; sum2=12
+        // combiner: sum1=41; sum2=35
+    }
+
+
+    @Test
+    public void testParallelStreams() {
+        ForkJoinPool commonPool = ForkJoinPool.commonPool();
+        System.out.println(commonPool.getParallelism());    // 3
+
+        Arrays.asList("a1", "a2", "b1", "c2", "c1")
+                .parallelStream()
+                .filter(s -> {
+                    System.out.format("filter: %s [%s]\n",
+                            s, Thread.currentThread().getName());
+                    return true;
+                })
+                .map(s -> {
+                    System.out.format("map: %s [%s]\n",
+                            s, Thread.currentThread().getName());
+                    return s.toUpperCase();
+                })
+                .forEach(s -> System.out.format("forEach: %s [%s]\n",
+                        s, Thread.currentThread().getName()));
+
+        Arrays.asList("a1", "a2", "b1", "c2", "c1")
+                .parallelStream()
+                .filter(s -> {
+                    System.out.format("filter: %s [%s]\n",
+                            s, Thread.currentThread().getName());
+                    return true;
+                })
+                .map(s -> {
+                    System.out.format("map: %s [%s]\n",
+                            s, Thread.currentThread().getName());
+                    return s.toUpperCase();
+                })
+                .sorted((s1, s2) -> {
+                    System.out.format("sort: %s <> %s [%s]\n",
+                            s1, s2, Thread.currentThread().getName());
+                    return s1.compareTo(s2);
+                })
+                .forEach(s -> System.out.format("forEach: %s [%s]\n",
+                        s, Thread.currentThread().getName()));
+
+        List<Person> persons = Arrays.asList(
+                new Person("Max", 18),
+                new Person("Peter", 23),
+                new Person("Pamela", 23),
+                new Person("David", 12));
+
+        persons
+                .parallelStream()
+                .reduce(0,
+                        (sum, p) -> {
+                            System.out.format("accumulator: sum=%s; person=%s [%s]\n",
+                                    sum, p, Thread.currentThread().getName());
+                            return sum += p.age;
+                        },
+                        (sum1, sum2) -> {
+                            System.out.format("combiner: sum1=%s; sum2=%s [%s]\n",
+                                    sum1, sum2, Thread.currentThread().getName());
+                            return sum1 + sum2;
+                        });
     }
 
     class Person {
@@ -280,5 +423,17 @@ public class StreamTutorial {
         Bar(String name) {
             this.name = name;
         }
+    }
+
+    class Outer {
+        Nested nested;
+    }
+
+    class Nested {
+        Inner inner;
+    }
+
+    class Inner {
+        String foo;
     }
 }
